@@ -7,7 +7,9 @@ if (!process.env.DATABASE_URL) {
 }
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined,
+  ssl: process.env.PGSSL === 'true'
+    ? { rejectUnauthorized: process.env.NODE_ENV === 'production' && process.env.PGSSL_ALLOW_SELF_SIGNED !== 'true' }
+    : undefined,
 });
 
 export async function initializeDatabase() {
@@ -42,6 +44,8 @@ export async function initializeDatabase() {
     );
     CREATE INDEX IF NOT EXISTS idx_tickets_updated_at ON tickets(updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
+    CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee);
     CREATE INDEX IF NOT EXISTS idx_entries_ticket_id ON ticket_entries(ticket_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_activity_ticket_id ON ticket_activity(ticket_id, created_at);
   `);

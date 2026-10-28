@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "concurrently -n API,WEB -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm --prefix server run dev",
-    "dev:client": "npm --prefix client run dev"
+    "dev:client": "npm --prefix client run dev",
+    "test": "npm --prefix server run test",
+    "type-check": "npm --prefix client run type-check",
+    "build:client": "npm --prefix client run build"
   },
-  "devDependencies": { "concurrently": "^9.1.2" }
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
 }

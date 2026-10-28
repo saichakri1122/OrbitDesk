@@ -27,3 +27,11 @@ CREATE TABLE IF NOT EXISTS ticket_activity (
   actor VARCHAR(120) NOT NULL DEFAULT 'Support Agent',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Performance and query indexes
+CREATE INDEX IF NOT EXISTS idx_tickets_updated_at ON tickets(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets(priority);
+CREATE INDEX IF NOT EXISTS idx_tickets_assignee ON tickets(assignee);
+CREATE INDEX IF NOT EXISTS idx_entries_ticket_id ON ticket_entries(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_activity_ticket_id ON ticket_activity(ticket_id, created_at);
