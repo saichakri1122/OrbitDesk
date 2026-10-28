@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const API = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api').replace(/\/$/, '');
 const STATUSES = ['Open', 'In Progress', 'Waiting on Customer', 'Resolved'];
@@ -153,6 +153,9 @@ export default function Home() {
   // Responsive navigation
   const [mobileNav, setMobileNav] = useState(false);
 
+  // Request tracking to prevent out-of-order search responses
+  const reqIdRef = useRef(0);
+
   // Fetch Dashboard metrics independently
   const refreshDashboard = useCallback(async () => {
     try {
@@ -165,38 +168,58 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch Tickets based on active filters
-  const refreshTickets = useCallback(async () => {
+  // Fetch Tickets based on active filters (race-condition protected)
+  const refreshTickets = useCallback(async (signal?: AbortSignal) => {
+    const currentReqId = ++reqIdRef.current;
+    setLoading(true);
     setError('');
     try {
       const params = new URLSearchParams();
-      if (search.trim()) params.set('search', search.trim());
+      const query = search.trim();
+      if (query) params.set('search', query);
       if (status) params.set('status', status);
       if (priority) params.set('priority', priority);
       if (assignee) params.set('assignee', assignee);
       params.set('sort', sort);
 
-      const res = await fetch(`${API}/tickets?${params}`);
+      const res = await fetch(`${API}/tickets?${params}`, { signal });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || 'Could not load tickets from the API. Is the server running?');
       }
-      setTickets(await res.json());
+      const data = await res.json();
+      // Prevent older responses from overwriting newer search results
+      if (currentReqId === reqIdRef.current) {
+        setTickets(data);
+      }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Unable to connect to the API.');
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        return; // Request was aborted due to newer input; do not set error
+      }
+      if (currentReqId === reqIdRef.current) {
+        setError(e instanceof Error ? e.message : 'Unable to connect to the API.');
+      }
     } finally {
-      setLoading(false);
+      if (currentReqId === reqIdRef.current) {
+        setLoading(false);
+      }
     }
   }, [search, status, priority, assignee, sort]);
 
-  // Initial load & debounced search/filter refresh
+  // Initial load & debounced search/filter refresh with cancellation
   useEffect(() => {
     refreshDashboard();
   }, [refreshDashboard]);
 
   useEffect(() => {
-    const id = setTimeout(refreshTickets, 180);
-    return () => clearTimeout(id);
+    const controller = new AbortController();
+    const id = setTimeout(() => {
+      refreshTickets(controller.signal);
+    }, 180);
+    return () => {
+      clearTimeout(id);
+      controller.abort();
+    };
   }, [refreshTickets]);
 
   // Escape key listener for accessible modal closing
@@ -704,12 +727,23 @@ export default function Home() {
               </span>
               <input
                 id="search-input"
-                className="field pl-9"
-                placeholder="Search tickets..."
+                className="field pl-9 pr-8"
+                placeholder="Search by ID, subject, name, email..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 aria-label="Search tickets"
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2.5 top-[9px] text-[#8e98a8] hover:text-[#202a3d] font-bold p-1 text-xs"
+                  aria-label="Clear search text"
+                  title="Clear search"
+                >
+                  ✕
+                </button>
+              )}
             </div>
 
             <select
@@ -765,21 +799,82 @@ export default function Home() {
             </select>
           </div>
 
-          {/* Active Filter Chips */}
-          {overdueOnly && (
-            <div className="px-5 py-2.5 bg-amber-50 border-b border-amber-200 flex items-center gap-3 text-xs">
-              <span className="text-amber-800 font-semibold">Filtering by:</span>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-100 text-amber-900 font-medium">
-                Overdue tickets only
-                <button
-                  type="button"
-                  onClick={() => setOverdueOnly(false)}
-                  className="hover:text-red-700 font-bold ml-1"
-                  aria-label="Remove overdue filter"
-                >
-                  ✕
-                </button>
-              </span>
+          {/* Active Filter & Search Chips */}
+          {(search.trim() || overdueOnly || status || priority || assignee) && (
+            <div className="px-5 py-2.5 bg-[#f8f9fc] border-b border-[#e7ebf1] flex flex-wrap items-center gap-2 text-xs">
+              <span className="text-[#556277] font-semibold">Active filters:</span>
+              {search.trim() && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#eeecff] text-[#5547d6] font-medium border border-[#ddd9fc]">
+                  Search: &ldquo;{search.trim()}&rdquo;
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="hover:text-red-700 font-bold ml-1"
+                    aria-label="Clear search filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              {overdueOnly && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-100 text-amber-900 font-medium border border-amber-200">
+                  Overdue tickets only
+                  <button
+                    type="button"
+                    onClick={() => setOverdueOnly(false)}
+                    className="hover:text-red-700 font-bold ml-1"
+                    aria-label="Remove overdue filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              {status && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#f1f3f7] text-[#2c384e] font-medium border border-[#dfe4ed]">
+                  Status: {status}
+                  <button
+                    type="button"
+                    onClick={() => setStatus('')}
+                    className="hover:text-red-700 font-bold ml-1"
+                    aria-label="Clear status filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              {priority && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#f1f3f7] text-[#2c384e] font-medium border border-[#dfe4ed]">
+                  Priority: {priority}
+                  <button
+                    type="button"
+                    onClick={() => setPriority('')}
+                    className="hover:text-red-700 font-bold ml-1"
+                    aria-label="Clear priority filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              {assignee && (
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#f1f3f7] text-[#2c384e] font-medium border border-[#dfe4ed]">
+                  Assignee: {assignee}
+                  <button
+                    type="button"
+                    onClick={() => setAssignee('')}
+                    className="hover:text-red-700 font-bold ml-1"
+                    aria-label="Clear assignee filter"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-xs text-[#6658e8] hover:underline font-semibold ml-auto"
+              >
+                Clear all filters
+              </button>
             </div>
           )}
 
@@ -800,25 +895,58 @@ export default function Home() {
                 {loading ? (
                   <tr>
                     <td colSpan={6} className="loading">
-                      Loading tickets…
+                      <span className="animate-pulse">Loading tickets…</span>
                     </td>
                   </tr>
                 ) : displayedTickets.length === 0 ? (
                   <tr>
                     <td colSpan={6} className="text-center p-12">
                       <div className="text-3xl mb-3">▤</div>
-                      <div className="font-semibold">No tickets found</div>
-                      <p className="muted text-sm mt-1">Try changing your filters or create a new ticket.</p>
-                      <button
-                        className="btn btn-primary mt-4"
-                        onClick={() => {
-                          setModalError('');
-                          setModalFieldErrors({});
-                          setShowCreate(true);
-                        }}
-                      >
-                        ＋ Create ticket
-                      </button>
+                      {search.trim() ? (
+                        <>
+                          <div className="font-semibold text-base">
+                            No tickets match &ldquo;{search.trim()}&rdquo;
+                          </div>
+                          <p className="muted text-sm mt-1 max-w-md mx-auto">
+                            We couldn&apos;t find any tickets matching your search across ticket ID, subject, customer name, or email.
+                          </p>
+                          <div className="flex justify-center gap-3 mt-4">
+                            <button className="btn btn-primary" onClick={() => setSearch('')}>
+                              ✕ Clear search
+                            </button>
+                            {(status || priority || assignee || overdueOnly) && (
+                              <button className="btn" onClick={clearFilters}>
+                                ↻ Reset all filters
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      ) : status || priority || assignee || overdueOnly ? (
+                        <>
+                          <div className="font-semibold text-base">No tickets match the selected filters</div>
+                          <p className="muted text-sm mt-1 max-w-md mx-auto">
+                            Try adjusting or resetting your status, priority, or assignee filters to view more tickets.
+                          </p>
+                          <button className="btn btn-primary mt-4" onClick={clearFilters}>
+                            ↻ Reset all filters
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div className="font-semibold text-base">No tickets in this workspace</div>
+                          <p className="muted text-sm mt-1">Get started by creating your first support ticket.</p>
+                          <button
+                            className="btn btn-primary mt-4"
+                            onClick={() => {
+                              setModalError('');
+                              setModalFieldErrors({});
+                              setShowCreate(true);
+                            }}
+                          >
+                            ＋ Create ticket
+                          </button>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ) : (

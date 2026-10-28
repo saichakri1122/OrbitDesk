@@ -1,4 +1,4 @@
-import { test, describe, before, after } from 'node:test';
+import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 const BASE_URL = process.env.TEST_API_URL || 'http://localhost:5000/api';
@@ -57,21 +57,99 @@ describe('OrbitDesk API Test Suite', () => {
     const res = await api('/tickets');
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.data));
+    assert.ok(res.data.length > 0);
   });
 
-  test('ISSUE-001 Verification: Ticket search executes safely without PostgreSQL error', async () => {
+  test('Ticket search by complete subject', async () => {
+    const res = await api('/tickets?search=login%20issue%20on%20the%20website');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.data));
+    assert.ok(res.data.some((t) => t.subject === 'login issue on the website'));
+  });
+
+  test('Ticket search by partial subject', async () => {
     const res = await api('/tickets?search=login');
     assert.equal(res.status, 200);
     assert.ok(Array.isArray(res.data));
+    assert.ok(res.data.some((t) => t.subject.toLowerCase().includes('login')));
+  });
 
-    // Non-matching search
-    const emptyRes = await api('/tickets?search=nonexistenttermxyz999');
+  test('Ticket search by customer name', async () => {
+    const res = await api('/tickets?search=Sai');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.data));
+    assert.ok(res.data.some((t) => t.customerName.toLowerCase().includes('sai')));
+  });
+
+  test('Ticket search by customer email', async () => {
+    const res = await api('/tickets?search=saichakrie%40gmail.com');
+    assert.equal(res.status, 200);
+    assert.ok(Array.isArray(res.data));
+    assert.ok(res.data.some((t) => t.customerEmail === 'saichakrie@gmail.com'));
+  });
+
+  test('Ticket search by ticket ID (numeric and hash prefix)', async () => {
+    // Numeric ID 1
+    const resNumeric = await api('/tickets?search=1');
+    assert.equal(resNumeric.status, 200);
+    assert.ok(Array.isArray(resNumeric.data));
+    assert.ok(resNumeric.data.some((t) => t.id === 1));
+
+    // Hash-prefixed #1
+    const resHash = await api('/tickets?search=%231');
+    assert.equal(resHash.status, 200);
+    assert.ok(Array.isArray(resHash.data));
+    assert.ok(resHash.data.some((t) => t.id === 1));
+  });
+
+  test('Ticket search is case-insensitive', async () => {
+    const lowerRes = await api('/tickets?search=login');
+    const upperRes = await api('/tickets?search=LOGIN');
+    const mixedRes = await api('/tickets?search=LoGiN');
+
+    assert.equal(lowerRes.status, 200);
+    assert.equal(upperRes.status, 200);
+    assert.equal(mixedRes.status, 200);
+    assert.equal(lowerRes.data.length, upperRes.data.length);
+    assert.equal(lowerRes.data.length, mixedRes.data.length);
+    assert.ok(lowerRes.data.length > 0);
+  });
+
+  test('Ticket search with non-matching query returns empty array', async () => {
+    const emptyRes = await api('/tickets?search=nonexistenttermxyz999999');
     assert.equal(emptyRes.status, 200);
     assert.ok(Array.isArray(emptyRes.data));
     assert.equal(emptyRes.data.length, 0);
+  });
 
-    // Search with special characters
-    const specialRes = await api('/tickets?search=%27%22%25');
+  test('Ticket search combined with status, priority, and assignee filters', async () => {
+    // Matching combination: search=login and status=Resolved
+    const matchRes = await api('/tickets?search=login&status=Resolved');
+    assert.equal(matchRes.status, 200);
+    assert.ok(matchRes.data.length > 0);
+    assert.ok(matchRes.data.every((t) => t.status === 'Resolved'));
+
+    // Non-matching combination: search=login and status=Open (ticket 1 is Resolved)
+    const noMatchRes = await api('/tickets?search=login&status=Open');
+    assert.equal(noMatchRes.status, 200);
+    assert.ok(Array.isArray(noMatchRes.data));
+    assert.equal(noMatchRes.data.length, 0);
+  });
+
+  test('Empty search returns all tickets without error', async () => {
+    const allRes = await api('/tickets');
+    const emptySearchRes = await api('/tickets?search=');
+    const whitespaceSearchRes = await api('/tickets?search=%20%20');
+
+    assert.equal(allRes.status, 200);
+    assert.equal(emptySearchRes.status, 200);
+    assert.equal(whitespaceSearchRes.status, 200);
+    assert.equal(allRes.data.length, emptySearchRes.data.length);
+    assert.equal(allRes.data.length, whitespaceSearchRes.data.length);
+  });
+
+  test('Search with special characters does not cause SQL injection or errors', async () => {
+    const specialRes = await api('/tickets?search=%27%22%25%3B--');
     assert.equal(specialRes.status, 200);
     assert.ok(Array.isArray(specialRes.data));
   });
@@ -156,22 +234,35 @@ describe('OrbitDesk API Test Suite', () => {
     const res = await api('/tickets', {
       method: 'POST',
       body: JSON.stringify({
-        subject: 'Automated Test Ticket Verification',
-        customerName: 'QA Bot',
-        customerEmail: 'qabot@example.com',
-        description: 'Verifying automated testing flow and activity tracking.',
+        subject: 'Automated Search Flow Verification Ticket',
+        customerName: 'Search QA Tester',
+        customerEmail: 'searchtester@example.com',
+        description: 'Verifying end-to-end search functionality with new ticket creation.',
         priority: 'High',
         status: 'Open',
-        assignee: 'Alex Morgan',
-        actor: 'Alex Morgan'
+        assignee: 'Taylor Reed',
+        actor: 'Taylor Reed'
       })
     });
     assert.equal(res.status, 201);
     assert.ok(res.data.id > 0);
-    assert.equal(res.data.subject, 'Automated Test Ticket Verification');
+    assert.equal(res.data.subject, 'Automated Search Flow Verification Ticket');
     assert.equal(res.data.status, 'Open');
     assert.equal(res.data.priority, 'High');
     createdTicketId = res.data.id;
+
+    // Verify search finds newly created ticket by ID, subject, customer name, and email
+    const searchById = await api(`/tickets?search=${createdTicketId}`);
+    assert.ok(searchById.data.some((t) => t.id === createdTicketId));
+
+    const searchBySubject = await api('/tickets?search=Search%20Flow%20Verification');
+    assert.ok(searchBySubject.data.some((t) => t.id === createdTicketId));
+
+    const searchByName = await api('/tickets?search=Search%20QA%20Tester');
+    assert.ok(searchByName.data.some((t) => t.id === createdTicketId));
+
+    const searchByEmail = await api('/tickets?search=searchtester%40example.com');
+    assert.ok(searchByEmail.data.some((t) => t.id === createdTicketId));
   });
 
   test('ISSUE-005 & ISSUE-007 Verification: Ticket update records activity for subject and actor', async () => {
@@ -181,8 +272,8 @@ describe('OrbitDesk API Test Suite', () => {
     const updateRes = await api(`/tickets/${createdTicketId}`, {
       method: 'PATCH',
       body: JSON.stringify({
-        subject: 'Updated Ticket Subject Title',
-        description: 'Updated ticket description content.',
+        subject: 'Updated Search Verification Subject',
+        description: 'Updated ticket description content for search test.',
         status: 'In Progress',
         priority: 'Urgent',
         assignee: 'Jamie Lee',
@@ -190,7 +281,7 @@ describe('OrbitDesk API Test Suite', () => {
       })
     });
     assert.equal(updateRes.status, 200);
-    assert.equal(updateRes.data.subject, 'Updated Ticket Subject Title');
+    assert.equal(updateRes.data.subject, 'Updated Search Verification Subject');
     assert.equal(updateRes.data.status, 'In Progress');
     assert.equal(updateRes.data.priority, 'Urgent');
     assert.equal(updateRes.data.assignee, 'Jamie Lee');

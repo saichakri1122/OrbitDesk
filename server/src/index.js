@@ -158,11 +158,11 @@ app.get('/api/tickets', asyncRoute(async (req, res) => {
   const clauses = [];
   const values = [];
 
-  const searchTerm = clean(search);
+  const searchTerm = clean(search).slice(0, 200);
   if (searchTerm) {
     values.push(searchTerm);
     const n = values.length;
-    clauses.push(`(subject ILIKE '%' || $${n} || '%' OR customer_name ILIKE '%' || $${n} || '%' OR customer_email ILIKE '%' || $${n} || '%')`);
+    clauses.push(`(id::text ILIKE '%' || $${n} || '%' OR ('#' || id::text) ILIKE '%' || $${n} || '%' OR subject ILIKE '%' || $${n} || '%' OR customer_name ILIKE '%' || $${n} || '%' OR customer_email ILIKE '%' || $${n} || '%')`);
   }
 
   if (status && STATUSES.includes(status)) {
